@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 import boto3
 from botocore.exceptions import ClientError
+from boto3.dynamodb.conditions import Key
 
 # Configure logging
 logger = logging.getLogger()
@@ -181,9 +182,8 @@ def handle_put(widget_name: str, body: str) -> Dict[str, Any]:
             )
 
         # Check if widget exists (get current state)
-        response = table.scan(
-            FilterExpression="PK = :pk",
-            ExpressionAttributeValues={":pk": widget_name}
+        response = table.query(
+            KeyConditionExpression=Key("PK").eq(widget_name)
         )
 
         if not response["Items"]:
@@ -240,9 +240,8 @@ def handle_get(widget_name: str) -> Dict[str, Any]:
     """
     try:
         # Get all records for this widget
-        response = table.scan(
-            FilterExpression="PK = :pk",
-            ExpressionAttributeValues={":pk": widget_name}
+        response = table.query(
+            KeyConditionExpression=Key("PK").eq(widget_name)
         )
 
         if not response["Items"]:
@@ -285,9 +284,8 @@ def handle_delete(widget_name: str) -> Dict[str, Any]:
     """
     try:
         # Get all records for this widget
-        response = table.scan(
-            FilterExpression="PK = :pk",
-            ExpressionAttributeValues={":pk": widget_name}
+        response = table.query(
+            KeyConditionExpression=Key("PK").eq(widget_name)
         )
 
         if not response["Items"]:
