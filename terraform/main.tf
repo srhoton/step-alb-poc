@@ -1,3 +1,17 @@
+# Local values for configuration
+locals {
+  # AWS Lambda IP ranges for us-east-1 region
+  # These ranges allow Lambda functions to reach ALB endpoints
+  # Source: https://docs.aws.amazon.com/general/latest/gr/aws-ip-ranges.html
+  lambda_ip_ranges = [
+    "52.94.198.112/28",
+    "52.94.199.0/24",
+    "52.119.205.0/24",
+    "52.119.207.0/24",
+    "52.119.214.0/23"
+  ]
+}
+
 resource "aws_dynamodb_table" "step_alb_poc" {
   name             = "step-alb-poc"
   billing_mode     = "PAY_PER_REQUEST"
@@ -42,13 +56,7 @@ resource "aws_security_group" "alb_sg" {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = [
-      "52.94.198.112/28",
-      "52.94.199.0/24",
-      "52.119.205.0/24",
-      "52.119.207.0/24",
-      "52.119.214.0/23"
-    ]
+    cidr_blocks = local.lambda_ip_ranges
   }
 
   egress {
