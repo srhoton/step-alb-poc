@@ -30,11 +30,11 @@ resource "aws_security_group" "alb_sg" {
   vpc_id      = data.aws_vpc.main_vpc.id
 
   ingress {
-    description = "HTTP from current IP"
+    description = "HTTP from allowed IPs"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["108.39.232.76/32"]
+    cidr_blocks = var.allowed_cidr_blocks
   }
 
   egress {
