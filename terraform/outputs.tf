@@ -44,3 +44,23 @@ output "api_base_url" {
   description = "Base URL for the widget API"
   value       = "http://${aws_route53_record.step_alb_poc.fqdn}/widgets"
 }
+
+output "mod_lambda_function_arn" {
+  description = "ARN of the mod Lambda function"
+  value       = aws_lambda_function.widget_mod.arn
+}
+
+output "mod_lambda_function_name" {
+  description = "Name of the mod Lambda function"
+  value       = aws_lambda_function.widget_mod.function_name
+}
+
+output "step_functions_state_machine_arn" {
+  description = "ARN of the Step Functions state machine"
+  value       = aws_sfn_state_machine.widget_state_machine.arn
+}
+
+output "step_functions_state_machine_name" {
+  description = "Name of the Step Functions state machine"
+  value       = aws_sfn_state_machine.widget_state_machine.name
+}
