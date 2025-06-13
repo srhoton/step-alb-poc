@@ -554,3 +554,163 @@ resource "aws_sfn_state_machine" "widget_state_machine" {
     aws_cloudwatch_log_group.step_functions_logs,
   ]
 }
+
+# ===== STREAMS-LAMBDA INFRASTRUCTURE =====
+
+# Create streams-lambda deployment package
+data "archive_file" "streams_lambda_zip" {
+  type        = "zip"
+  source_dir  = "${path.root}/../streams-lambda/src"
+  output_path = "${path.root}/streams_lambda_deployment.zip"
+  excludes    = ["__pycache__", "*.pyc", "tests"]
+}
+
+# IAM role for streams-lambda
+resource "aws_iam_role" "streams_lambda_role" {
+  name = "step-alb-poc-streams-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name        = "step-alb-poc-streams-lambda-role"
+    Environment = "dev"
+    ManagedBy   = "terraform"
+  }
+}
+
+# IAM policy for streams-lambda DynamoDB streams access
+resource "aws_iam_policy" "streams_lambda_dynamodb_streams_policy" {
+  name        = "step-alb-poc-streams-lambda-dynamodb-streams-policy"
+  description = "IAM policy for streams-lambda to read DynamoDB streams"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:DescribeStream",
+          "dynamodb:GetRecords",
+          "dynamodb:GetShardIterator",
+          "dynamodb:ListStreams"
+        ]
+        Resource = "${aws_dynamodb_table.step_alb_poc.arn}/stream/*"
+      }
+    ]
+  })
+
+  tags = {
+    Name        = "step-alb-poc-streams-lambda-dynamodb-streams-policy"
+    Environment = "dev"
+    ManagedBy   = "terraform"
+  }
+}
+
+# IAM policy for streams-lambda Step Functions execution
+resource "aws_iam_policy" "streams_lambda_step_functions_policy" {
+  name        = "step-alb-poc-streams-lambda-step-functions-policy"
+  description = "IAM policy for streams-lambda to start Step Functions executions"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "states:StartExecution"
+        ]
+        Resource = aws_sfn_state_machine.widget_state_machine.arn
+      }
+    ]
+  })
+
+  tags = {
+    Name        = "step-alb-poc-streams-lambda-step-functions-policy"
+    Environment = "dev"
+    ManagedBy   = "terraform"
+  }
+}
+
+# Attach DynamoDB streams policy to streams-lambda role
+resource "aws_iam_role_policy_attachment" "streams_lambda_dynamodb_streams_policy_attachment" {
+  role       = aws_iam_role.streams_lambda_role.name
+  policy_arn = aws_iam_policy.streams_lambda_dynamodb_streams_policy.arn
+}
+
+# Attach Step Functions policy to streams-lambda role
+resource "aws_iam_role_policy_attachment" "streams_lambda_step_functions_policy_attachment" {
+  role       = aws_iam_role.streams_lambda_role.name
+  policy_arn = aws_iam_policy.streams_lambda_step_functions_policy.arn
+}
+
+# Attach basic execution role for CloudWatch logs
+resource "aws_iam_role_policy_attachment" "streams_lambda_basic_execution" {
+  role       = aws_iam_role.streams_lambda_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# CloudWatch log group for streams-lambda
+resource "aws_cloudwatch_log_group" "streams_lambda_logs" {
+  name              = "/aws/lambda/step-alb-poc-widget-streams"
+  retention_in_days = 14
+
+  tags = {
+    Name        = "step-alb-poc-streams-lambda-logs"
+    Environment = "dev"
+    ManagedBy   = "terraform"
+  }
+}
+
+# Streams-Lambda function
+resource "aws_lambda_function" "widget_streams" {
+  filename         = data.archive_file.streams_lambda_zip.output_path
+  function_name    = "step-alb-poc-widget-streams"
+  role             = aws_iam_role.streams_lambda_role.arn
+  handler          = "lambda_handler.lambda_handler"
+  source_code_hash = data.archive_file.streams_lambda_zip.output_base64sha256
+  runtime          = "python3.13"
+  timeout          = 60
+  memory_size      = 256
+
+  environment {
+    variables = {
+      STEP_FUNCTION_ARN = aws_sfn_state_machine.widget_state_machine.arn
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.streams_lambda_basic_execution,
+    aws_iam_role_policy_attachment.streams_lambda_dynamodb_streams_policy_attachment,
+    aws_iam_role_policy_attachment.streams_lambda_step_functions_policy_attachment,
+    aws_cloudwatch_log_group.streams_lambda_logs,
+  ]
+
+  tags = {
+    Name        = "step-alb-poc-widget-streams"
+    Environment = "dev"
+    ManagedBy   = "terraform"
+  }
+}
+
+# DynamoDB stream event source mapping for streams-lambda
+resource "aws_lambda_event_source_mapping" "dynamodb_stream_trigger" {
+  event_source_arn  = aws_dynamodb_table.step_alb_poc.stream_arn
+  function_name     = aws_lambda_function.widget_streams.arn
+  starting_position = "LATEST"
+  batch_size        = 10
+
+  depends_on = [
+    aws_lambda_function.widget_streams
+  ]
+}
