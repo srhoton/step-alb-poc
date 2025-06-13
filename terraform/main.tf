@@ -37,6 +37,20 @@ resource "aws_security_group" "alb_sg" {
     cidr_blocks = var.allowed_cidr_blocks
   }
 
+  ingress {
+    description = "HTTP from Lambda IP ranges"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = [
+      "52.94.198.112/28",
+      "52.94.199.0/24",
+      "52.119.205.0/24",
+      "52.119.207.0/24",
+      "52.119.214.0/23"
+    ]
+  }
+
   egress {
     from_port        = 0
     to_port          = 0
@@ -355,4 +369,180 @@ resource "aws_lambda_function" "widget_mod" {
     Environment = "dev"
     ManagedBy   = "terraform"
   }
+}
+
+# Permission for Step Functions to invoke mod-lambda
+resource "aws_lambda_permission" "step_functions_invoke_mod_lambda" {
+  statement_id  = "AllowExecutionFromStepFunctions"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.widget_mod.function_name
+  principal     = "states.amazonaws.com"
+}
+
+# ===== STEP FUNCTIONS INFRASTRUCTURE =====
+
+# IAM role for Step Functions
+resource "aws_iam_role" "step_functions_role" {
+  name = "step-alb-poc-step-functions-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "states.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name        = "step-alb-poc-step-functions-role"
+    Environment = "dev"
+    ManagedBy   = "terraform"
+  }
+}
+
+# IAM policy for Step Functions to invoke Lambda
+resource "aws_iam_policy" "step_functions_lambda_policy" {
+  name        = "step-alb-poc-step-functions-lambda-policy"
+  description = "IAM policy for Step Functions to invoke mod-lambda"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "lambda:InvokeFunction"
+        ]
+        Resource = aws_lambda_function.widget_mod.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogDelivery",
+          "logs:GetLogDelivery",
+          "logs:UpdateLogDelivery",
+          "logs:DeleteLogDelivery",
+          "logs:ListLogDeliveries",
+          "logs:PutResourcePolicy",
+          "logs:DescribeResourcePolicies",
+          "logs:DescribeLogGroups"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+
+  tags = {
+    Name        = "step-alb-poc-step-functions-lambda-policy"
+    Environment = "dev"
+    ManagedBy   = "terraform"
+  }
+}
+
+# Attach Lambda invoke policy to Step Functions role
+resource "aws_iam_role_policy_attachment" "step_functions_lambda_policy_attachment" {
+  role       = aws_iam_role.step_functions_role.name
+  policy_arn = aws_iam_policy.step_functions_lambda_policy.arn
+}
+
+# CloudWatch log group for Step Functions
+resource "aws_cloudwatch_log_group" "step_functions_logs" {
+  name              = "/aws/stepfunctions/step-alb-poc-widget-state-machine"
+  retention_in_days = 14
+
+  tags = {
+    Name        = "step-alb-poc-step-functions-logs"
+    Environment = "dev"
+    ManagedBy   = "terraform"
+  }
+}
+
+# Step Functions state machine definition
+locals {
+  state_machine_definition = jsonencode({
+    Comment = "Widget state transition management"
+    StartAt = "WaitForInitialTransition"
+    States = {
+      WaitForInitialTransition = {
+        Type          = "Wait"
+        TimestampPath = "$.transitionAt"
+        Next          = "UpdateToInProgress"
+      }
+      UpdateToInProgress = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::lambda:invoke"
+        Parameters = {
+          FunctionName = aws_lambda_function.widget_mod.function_name
+          Payload = {
+            "widget_id.$" = "$.widget_id"
+            "status"      = "in_progress"
+          }
+        }
+        ResultPath = "$.lambdaResult"
+        Next       = "WaitForFinalTransition"
+        Retry = [
+          {
+            ErrorEquals     = ["States.TaskFailed"]
+            IntervalSeconds = 2
+            MaxAttempts     = 0
+            BackoffRate     = 2.0
+          }
+        ]
+      }
+      WaitForFinalTransition = {
+        Type    = "Wait"
+        Seconds = 3600
+        Next    = "UpdateToDone"
+      }
+      UpdateToDone = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::lambda:invoke"
+        Parameters = {
+          FunctionName = aws_lambda_function.widget_mod.function_name
+          Payload = {
+            "widget_id.$" = "$.widget_id"
+            "status"      = "done"
+          }
+        }
+        End = true
+        Retry = [
+          {
+            ErrorEquals     = ["States.TaskFailed"]
+            IntervalSeconds = 2
+            MaxAttempts     = 0
+            BackoffRate     = 2.0
+          }
+        ]
+      }
+    }
+  })
+}
+
+# Step Functions state machine
+resource "aws_sfn_state_machine" "widget_state_machine" {
+  name       = "step-alb-poc-widget-state-machine"
+  role_arn   = aws_iam_role.step_functions_role.arn
+  definition = local.state_machine_definition
+
+  logging_configuration {
+    log_destination        = "${aws_cloudwatch_log_group.step_functions_logs.arn}:*"
+    include_execution_data = true
+    level                  = "ERROR"
+  }
+
+  tags = {
+    Name        = "step-alb-poc-widget-state-machine"
+    Environment = "dev"
+    ManagedBy   = "terraform"
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.step_functions_lambda_policy_attachment,
+    aws_cloudwatch_log_group.step_functions_logs,
+  ]
 }
