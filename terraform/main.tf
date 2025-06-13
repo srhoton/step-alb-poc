@@ -497,7 +497,7 @@ locals {
           {
             ErrorEquals     = ["States.TaskFailed"]
             IntervalSeconds = 2
-            MaxAttempts     = 0
+            MaxAttempts     = 1
             BackoffRate     = 2.0
           }
         ]
@@ -522,7 +522,7 @@ locals {
           {
             ErrorEquals     = ["States.TaskFailed"]
             IntervalSeconds = 2
-            MaxAttempts     = 0
+            MaxAttempts     = 1
             BackoffRate     = 2.0
           }
         ]
