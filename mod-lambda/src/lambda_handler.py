@@ -133,8 +133,8 @@ def update_widget_via_alb(
         raise ModLambdaError("ALB API request timed out", 504) from None
     except requests.exceptions.ConnectionError:
         raise ModLambdaError("Failed to connect to ALB API", 502) from None
-    except (requests.exceptions.JSONDecodeError, json.JSONDecodeError):
-        logger.warning("ALB API returned non-JSON response")
+    except (requests.exceptions.JSONDecodeError, json.JSONDecodeError, ValueError):
+        logger.warning("ALB API returned non-JSON response or raised ValueError")
         return {}
     except requests.exceptions.RequestException as e:
         raise ModLambdaError(f"ALB API request failed: {str(e)}", 500) from e
