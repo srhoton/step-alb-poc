@@ -241,3 +241,118 @@ resource "aws_lb_listener" "web" {
     ManagedBy   = "terraform"
   }
 }
+
+# ===== MOD-LAMBDA INFRASTRUCTURE =====
+
+# Create mod-lambda deployment package
+data "archive_file" "mod_lambda_zip" {
+  type        = "zip"
+  source_dir  = "${path.root}/../mod-lambda/src"
+  output_path = "${path.root}/mod_lambda_deployment.zip"
+  excludes    = ["__pycache__", "*.pyc", "tests"]
+}
+
+# IAM role for mod-lambda
+resource "aws_iam_role" "mod_lambda_role" {
+  name = "step-alb-poc-mod-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name        = "step-alb-poc-mod-lambda-role"
+    Environment = "dev"
+    ManagedBy   = "terraform"
+  }
+}
+
+# IAM policy for mod-lambda Step Functions integration
+resource "aws_iam_policy" "mod_lambda_step_functions_policy" {
+  name        = "step-alb-poc-mod-lambda-step-functions-policy"
+  description = "IAM policy for mod-lambda to be invoked by Step Functions"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:*:*:*"
+      }
+    ]
+  })
+
+  tags = {
+    Name        = "step-alb-poc-mod-lambda-step-functions-policy"
+    Environment = "dev"
+    ManagedBy   = "terraform"
+  }
+}
+
+# Attach Step Functions policy to mod-lambda role
+resource "aws_iam_role_policy_attachment" "mod_lambda_step_functions_policy_attachment" {
+  role       = aws_iam_role.mod_lambda_role.name
+  policy_arn = aws_iam_policy.mod_lambda_step_functions_policy.arn
+}
+
+# Attach basic execution role for CloudWatch logs
+resource "aws_iam_role_policy_attachment" "mod_lambda_basic_execution" {
+  role       = aws_iam_role.mod_lambda_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# CloudWatch log group for mod-lambda
+resource "aws_cloudwatch_log_group" "mod_lambda_logs" {
+  name              = "/aws/lambda/step-alb-poc-widget-mod"
+  retention_in_days = 14
+
+  tags = {
+    Name        = "step-alb-poc-mod-lambda-logs"
+    Environment = "dev"
+    ManagedBy   = "terraform"
+  }
+}
+
+# Mod-Lambda function
+resource "aws_lambda_function" "widget_mod" {
+  filename         = data.archive_file.mod_lambda_zip.output_path
+  function_name    = "step-alb-poc-widget-mod"
+  role             = aws_iam_role.mod_lambda_role.arn
+  handler          = "lambda_handler.lambda_handler"
+  source_code_hash = data.archive_file.mod_lambda_zip.output_base64sha256
+  runtime          = "python3.13"
+  timeout          = 30
+  memory_size      = 256
+
+  environment {
+    variables = {
+      ALB_ENDPOINT = "http://${aws_route53_record.step_alb_poc.name}"
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.mod_lambda_basic_execution,
+    aws_iam_role_policy_attachment.mod_lambda_step_functions_policy_attachment,
+    aws_cloudwatch_log_group.mod_lambda_logs,
+  ]
+
+  tags = {
+    Name        = "step-alb-poc-widget-mod"
+    Environment = "dev"
+    ManagedBy   = "terraform"
+  }
+}
